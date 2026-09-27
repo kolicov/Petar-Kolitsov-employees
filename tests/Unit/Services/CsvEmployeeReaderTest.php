@@ -10,6 +10,7 @@ use App\Exceptions\CsvImportException;
 use App\Services\CsvEmployeeReader;
 use App\Services\DateParser;
 use Carbon\CarbonImmutable;
+use PHPUnit\Framework\Attributes\TestWith;
 use PHPUnit\Framework\TestCase;
 
 final class CsvEmployeeReaderTest extends TestCase
@@ -42,12 +43,45 @@ final class CsvEmployeeReaderTest extends TestCase
         $this->assertSame([], $result->warnings);
     }
 
+    public function testRecordsKeepDatesAsDayNumbersNotDateObjects(): void
+    {
+        $record = $this->read("143, 12, 2013-11-01, NULL\n")->records[0];
+
+        foreach (get_object_vars($record) as $property => $value) {
+            $this->assertIsInt($value, $property);
+        }
+        $this->assertSame(16010, $record->fromDay);
+        $this->assertSame('2013-11-01', $record->dateFrom()->format('Y-m-d'));
+        $this->assertSame('2024-06-15', $record->dateTo()->format('Y-m-d'));
+    }
+
     public function testAHeaderRowIsSkipped(): void
     {
         $result = $this->read("EmpID, ProjectID, DateFrom, DateTo\n143, 12, 2013-11-01, 2014-01-05\n");
 
         $this->assertSame([[143, 12, '2013-11-01', '2014-01-05']], $this->rows($result));
         $this->assertSame([], $result->warnings);
+    }
+
+    #[TestWith(['EmpID, ProjectID, DateFrom, DateTo'])]
+    #[TestWith(['empid,projectid,datefrom,dateto'])]
+    #[TestWith(['Employee ID, Project ID, Date From, Date To'])]
+    #[TestWith(['EMPID,PROJECTID,DATEFROM,DATETO'])]
+    public function testCommonHeaderNamesAreSkippedSilently(string $header): void
+    {
+        $result = $this->read($header."\n143, 12, 2013-11-01, 2014-01-05\n");
+
+        $this->assertSame([[143, 12, '2013-11-01', '2014-01-05']], $this->rows($result));
+        $this->assertSame([], $result->warnings);
+    }
+
+    public function testAnInvalidFirstDataRowIsReportedInsteadOfTreatedAsAHeader(): void
+    {
+        $result = $this->read("abc, 10, 2020-01-01, 2020-02-01\n1, 10, 2020-01-01, 2020-01-10\n2, 10, 2020-01-05, 2020-01-20\n");
+
+        $this->assertSame([[1, 10, '2020-01-01', '2020-01-10'], [2, 10, '2020-01-05', '2020-01-20']], $this->rows($result));
+        $this->assertSame(["Line 1: invalid EmpID 'abc'"], $result->warnings);
+        $this->assertSame(1, $result->skippedRows);
     }
 
     public function testBomCrlfBlankLinesAndWhitespaceAreHandled(): void
@@ -220,8 +254,8 @@ final class CsvEmployeeReaderTest extends TestCase
         return array_map(fn (EmployeeRecord $r): array => [
             $r->empId,
             $r->projectId,
-            $r->dateFrom->format('Y-m-d'),
-            $r->dateTo->format('Y-m-d'),
+            $r->dateFrom()->format('Y-m-d'),
+            $r->dateTo()->format('Y-m-d'),
         ], $result->records);
     }
 }

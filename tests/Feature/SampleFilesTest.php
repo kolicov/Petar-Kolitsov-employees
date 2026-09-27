@@ -52,7 +52,7 @@ final class SampleFilesTest extends TestCase
     {
         $reader = $this->app->make(CsvEmployeeReader::class);
         $asRows = fn (array $records): array => array_map(fn (EmployeeRecord $r): string => sprintf(
-            '%d,%d,%s,%s', $r->empId, $r->projectId, $r->dateFrom->format('Y-m-d'), $r->dateTo->format('Y-m-d'),
+            '%d,%d,%s,%s', $r->empId, $r->projectId, $r->dateFrom()->format('Y-m-d'), $r->dateTo()->format('Y-m-d'),
         ), $records);
 
         $iso = $asRows($reader->read(base_path('samples/sample.csv'))->records);

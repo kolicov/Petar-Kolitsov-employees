@@ -195,8 +195,8 @@ final class EmployeePairFinderTest extends TestCase
     public function testTheTimeOfDayIsIgnored(): void
     {
         $result = (new EmployeePairFinder)->find([
-            new EmployeeRecord(1, 10, new DateTimeImmutable('2020-01-01 23:00'), new DateTimeImmutable('2020-01-02 01:00')),
-            new EmployeeRecord(2, 10, new DateTimeImmutable('2020-01-02 22:00'), new DateTimeImmutable('2020-01-05 00:00')),
+            EmployeeRecord::fromDates(1, 10, new DateTimeImmutable('2020-01-01 23:00'), new DateTimeImmutable('2020-01-02 01:00')),
+            EmployeeRecord::fromDates(2, 10, new DateTimeImmutable('2020-01-02 22:00'), new DateTimeImmutable('2020-01-05 00:00')),
         ]);
 
         $this->assertPair(1, 2, 1, $result);
@@ -208,7 +208,7 @@ final class EmployeePairFinderTest extends TestCase
     private function find(array ...$rows): ?PairResult
     {
         $records = array_map(
-            fn (array $row): EmployeeRecord => new EmployeeRecord(
+            fn (array $row): EmployeeRecord => EmployeeRecord::fromDates(
                 $row[0],
                 $row[1],
                 new DateTimeImmutable($row[2]),

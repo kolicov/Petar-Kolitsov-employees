@@ -73,7 +73,7 @@ final readonly class CsvEmployeeReader
             if ($isFirstRow) {
                 $isFirstRow = false;
 
-                if (! $this->isId($row[0])) {
+                if ($this->isHeader($row)) {
                     continue;
                 }
             }
@@ -200,7 +200,28 @@ final readonly class CsvEmployeeReader
             ));
         }
 
-        return new EmployeeRecord((int) $empId, (int) $projectId, $from, $to);
+        return EmployeeRecord::fromDates((int) $empId, (int) $projectId, $from, $to);
+    }
+
+    /**
+     * @param  list<string>  $row
+     */
+    private function isHeader(array $row): bool
+    {
+        [$empId, $projectId, $dateFrom] = array_pad($row, 3, '');
+
+        return ! $this->isId($empId) && ! $this->isId($projectId) && ! $this->isDate($dateFrom);
+    }
+
+    private function isDate(string $value): bool
+    {
+        try {
+            $this->dateParser->parse($value);
+
+            return true;
+        } catch (InvalidDateException) {
+            return false;
+        }
     }
 
     private function isId(string $value): bool

@@ -64,8 +64,10 @@ npm install && npm run build
 php artisan serve
 ```
 
-Open <http://localhost:8000>. Uploads are also limited by PHP's `upload_max_filesize`
-(often 2 MB by default); the app itself accepts files up to 20 MB, which the Docker image allows.
+Open <http://localhost:8000>. The app accepts files up to 20 MB, but local PHP also applies its own
+limits: `upload_max_filesize` and `post_max_size` (often 2 MB and 8 MB by default) must be at least
+20M/21M, and the largest files need `memory_limit` of about 256M (a realistic 20 MB file of about
+570,000 rows peaks at about 210 MB). The Docker image already sets all three.
 
 ## Console usage
 
@@ -158,7 +160,9 @@ ones (`Nov 2013`) are not accepted.
   themselves.
 - **Invalid rows are skipped** with warnings (`Line 7: invalid date 'abc'`). The file is rejected only
   if it is empty or has no valid rows.
-- **The header is optional:** a first row whose EmpID is not a number is treated as the header.
+- **The header is optional:** the first row is treated as the header only when none of its values look
+  like data (EmpID and ProjectID are not numbers and DateFrom is not a date). An invalid first data row
+  is reported as a warning like any other row.
 - **No database or storage:** the uploaded temp file is read directly and never saved.
 
 ## Architecture
@@ -176,14 +180,15 @@ ones (`Nov 2013`) are not accepted.
 
 ### Algorithm
 
-1. **Group** the periods by project, then by employee (each date is turned into a day number).
+1. **Group** the records by project, then by employee (dates are stored as day numbers, which keeps
+   memory low for large files).
 2. **Merge** each employee's overlapping or adjacent periods on a project into disjoint periods.
 3. For each project, for **every two employees** on it (smaller ID first), add up the overlap of
    their periods: `start = max(from1, from2)`, `end = min(to1, to2)`, and if `start <= end` the overlap
    is `end - start + 1` days.
-4. **Accumulate** the days in a map `[empId1][empId2][projectId] => days`, then pick the pair with
-   the highest sum (tie-break above). Its per-project entries become the datagrid rows, so the rows
-   always add up to the total.
+4. **Accumulate** a running total per pair, then pick the pair with the highest sum (tie-break above).
+   The per-project days are then recalculated for the winning pair only; they become the datagrid
+   rows, so the rows always add up to the total.
 
 Employees are only compared within a project, so the cost grows with the number of people per
 project, not with the size of the whole file.
