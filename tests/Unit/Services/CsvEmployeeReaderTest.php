@@ -6,6 +6,8 @@ namespace Tests\Unit\Services;
 
 use App\DTO\CsvReadResult;
 use App\DTO\EmployeeRecord;
+use App\Enums\DateOrder;
+use App\Enums\DateOrderReason;
 use App\Exceptions\CsvImportException;
 use App\Services\CsvEmployeeReader;
 use Carbon\CarbonImmutable;
@@ -204,6 +206,89 @@ final class CsvEmployeeReaderTest extends TestCase
         $this->assertSame(9, $result->skippedRows);
     }
 
+    public function testDayFirstEvidenceIsDetectedFromTheFile(): void
+    {
+        $result = $this->read("EmpID,ProjectID,DateFrom,DateTo\n\n1,10,01/02/2013,05/02/2013\n2,10,25/02/2013,NULL\n");
+
+        $this->assertDateOrder(DateOrder::DayFirst, DateOrderReason::Detected, $result);
+        $this->assertSame([4, '25/02/2013'], [$result->dateOrder->evidenceLine, $result->dateOrder->evidence]);
+        $this->assertSame('2013-02-01', $this->rows($result)[0][2]);
+        $this->assertSame(
+            'Ambiguous dates like 01/02/2013 were read as day-first (detected from line 4: 25/02/2013).',
+            $result->dateOrder->summary(),
+        );
+    }
+
+    public function testMonthFirstEvidenceIsDetectedFromTheFile(): void
+    {
+        $result = $this->read("1,10,01/02/2013,03/04/2013\n2,10,01/05/2013,12/31/2013\n");
+
+        $this->assertDateOrder(DateOrder::MonthFirst, DateOrderReason::Detected, $result);
+        $this->assertSame([2, '12/31/2013'], [$result->dateOrder->evidenceLine, $result->dateOrder->evidence]);
+        $this->assertSame([[1, 10, '2013-01-02', '2013-03-04'], [2, 10, '2013-01-05', '2013-12-31']], $this->rows($result));
+    }
+
+    public function testWithoutEvidenceTheDefaultOrderIsUsed(): void
+    {
+        $result = $this->read("1,10,01/02/2013,03/04/2013\n");
+
+        $this->assertDateOrder(DateOrder::DayFirst, DateOrderReason::Default, $result);
+        $this->assertSame([[1, 10, '2013-02-01', '2013-04-03']], $this->rows($result));
+        $this->assertSame(
+            'Ambiguous dates like 01/02/2013 were read as day-first (the default; the file gives no evidence).',
+            $result->dateOrder->summary(),
+        );
+    }
+
+    public function testTheConfiguredDefaultCanBeMonthFirst(): void
+    {
+        $result = (new CsvEmployeeReader(self::dateParser(DateOrder::MonthFirst)))->read($this->file("1,10,01/02/2013,03/04/2013\n"));
+
+        $this->assertDateOrder(DateOrder::MonthFirst, DateOrderReason::Default, $result);
+        $this->assertSame([[1, 10, '2013-01-02', '2013-03-04']], $this->rows($result));
+    }
+
+    public function testConflictingEvidenceFallsBackToTheDefault(): void
+    {
+        $result = $this->read("1,10,25/02/2013,02/25/2013\n2,10,01/02/2013,NULL\n");
+
+        $this->assertDateOrder(DateOrder::DayFirst, DateOrderReason::Conflicting, $result);
+        $this->assertNull($result->dateOrder->evidenceLine);
+        $this->assertSame(
+            'Ambiguous dates like 01/02/2013 were read as day-first (the default; the file contains both day-first and month-first dates).',
+            $result->dateOrder->summary(),
+        );
+    }
+
+    public function testYearFirstAndMonthNameDatesAreNotEvidence(): void
+    {
+        $result = $this->read("1,10,2013/12/25,Dec 25 2013\n2,10,25 Dec 2013,2013-12-31\n3,10,01/02/2013,NULL\n");
+
+        $this->assertDateOrder(DateOrder::DayFirst, DateOrderReason::Default, $result);
+    }
+
+    public function testInvalidRowsAreNotEvidence(): void
+    {
+        $result = $this->read("abc,10,12/31/2013,NULL\n1,10\n2,10,01/02/2013,NULL\n");
+
+        $this->assertDateOrder(DateOrder::DayFirst, DateOrderReason::Default, $result);
+    }
+
+    public function testThereIsNoSummaryWithoutAmbiguousDates(): void
+    {
+        $result = $this->read("1,10,25/02/2013,2013-03-01\n2,10,1 Mar 2013,05/05/2013\n");
+
+        $this->assertDateOrder(DateOrder::DayFirst, DateOrderReason::Detected, $result);
+        $this->assertNull($result->dateOrder->summary());
+    }
+
+    public function testRepeatedInvalidDatesAreReportedEveryTime(): void
+    {
+        $result = $this->read("1,10,abc,NULL\n2,10,abc,NULL\n3,10,2013-01-01,NULL\n");
+
+        $this->assertSame(["Line 1: invalid date 'abc'", "Line 2: invalid date 'abc'"], $result->warnings);
+    }
+
     public function testAnEmptyFileIsAnError(): void
     {
         $this->expectException(CsvImportException::class);
@@ -241,11 +326,22 @@ final class CsvEmployeeReaderTest extends TestCase
 
     private function read(string $contents): CsvReadResult
     {
+        return (new CsvEmployeeReader(self::dateParser()))->read($this->file($contents));
+    }
+
+    private function file(string $contents): string
+    {
         $path = tempnam(sys_get_temp_dir(), 'csv');
         file_put_contents($path, $contents);
         $this->files[] = $path;
 
-        return (new CsvEmployeeReader(self::dateParser()))->read($path);
+        return $path;
+    }
+
+    private function assertDateOrder(DateOrder $order, DateOrderReason $reason, CsvReadResult $result): void
+    {
+        $this->assertNotNull($result->dateOrder);
+        $this->assertSame([$order, $reason], [$result->dateOrder->order, $result->dateOrder->reason]);
     }
 
     /**

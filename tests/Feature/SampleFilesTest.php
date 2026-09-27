@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Tests\Feature;
 
 use App\DTO\EmployeeRecord;
+use App\Enums\DateOrder;
+use App\Enums\DateOrderReason;
 use App\Services\CsvEmployeeReader;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\UploadedFile;
@@ -46,6 +48,46 @@ final class SampleFilesTest extends TestCase
             [[10, 214], [12, 36], [15, 122]],
             array_map(fn ($p): array => [$p->projectId, $p->days], $pair->projects),
         );
+    }
+
+    public function testMixedDateFormatsHaveConflictingEvidenceAndFallBackToDayFirst(): void
+    {
+        $note = 'Ambiguous dates like 01/11/2013 were read as day-first (the default; the file contains both day-first and month-first dates).';
+
+        $dateOrder = $this->app->make(CsvEmployeeReader::class)->read(base_path('samples/mixed-date-formats.csv'))->dateOrder;
+        $this->assertSame([DateOrder::DayFirst, DateOrderReason::Conflicting], [$dateOrder->order, $dateOrder->reason]);
+
+        $this->artisan('employees:longest-pair', ['file' => base_path('samples/mixed-date-formats.csv')])
+            ->expectsOutput($note)
+            ->expectsOutput('143, 218, 372')
+            ->assertExitCode(Command::SUCCESS);
+
+        $this->upload('mixed-date-formats.csv')->assertOk()->assertSee($note);
+    }
+
+    public function testUsDatesAreDetectedAsMonthFirst(): void
+    {
+        $note = 'Ambiguous dates like 03/01/2014 were read as month-first (detected from line 6: 12/31/2014).';
+
+        $this->artisan('employees:longest-pair', ['file' => base_path('samples/us-dates.csv')])
+            ->expectsOutput($note)
+            ->expectsOutput('10, 20, 68')
+            ->assertExitCode(Command::SUCCESS);
+
+        $response = $this->upload('us-dates.csv')->assertOk()->assertSee($note);
+        $pair = $response->viewData('pair');
+
+        // Read day-first, the same file would give 30, 40, 124.
+        $this->assertSame([10, 20, 68], [$pair->empId1, $pair->empId2, $pair->totalDays]);
+        $this->assertSame(
+            [[1, 62], [4, 6]],
+            array_map(fn ($p): array => [$p->projectId, $p->days], $pair->projects),
+        );
+    }
+
+    public function testSampleFilesWithoutAmbiguousDatesShowNoDateOrderNote(): void
+    {
+        $this->upload('sample.csv')->assertOk()->assertDontSee('Ambiguous dates like');
     }
 
     public function testMixedDateFormatsParseToTheSameRecordsAsTheIsoSample(): void

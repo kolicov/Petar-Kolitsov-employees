@@ -92,6 +92,19 @@ final class FindLongestPairCommandTest extends TestCase
             ->assertExitCode(Command::SUCCESS);
     }
 
+    public function testTheDateOrderNoteIsPrinted(): void
+    {
+        $this->csv(
+            '1, 10, 01/02/2014, 03/04/2014',
+            '2, 10, 02/02/2014, 03/04/2014',
+        );
+
+        $this->artisan('employees:longest-pair', ['file' => $this->path])
+            ->expectsOutput('Ambiguous dates like 01/02/2014 were read as day-first (the default; the file gives no evidence).')
+            ->expectsOutput('1, 2, 61')
+            ->assertExitCode(Command::SUCCESS);
+    }
+
     public function testAMissingFileFails(): void
     {
         $this->artisan('employees:longest-pair', ['file' => '/nonexistent/file.csv'])

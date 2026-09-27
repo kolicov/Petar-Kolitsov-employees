@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Services;
 
 use App\Enums\DateOrder;
+use App\Enums\DateOrderEvidence;
 use App\Exceptions\InvalidDateException;
 use App\Services\DateParser;
 use Carbon\CarbonImmutable;
@@ -48,7 +49,16 @@ final class DateParserTest extends TestCase
             // Month names
             '1 Nov 2013', '01-Nov-2013', '01-Nov-13', 'Nov 1, 2013', 'November 1, 2013', '1 November 2013',
             'Friday, November 1, 2013', 'Friday 1 November 2013', '1st November 2013', 'NOV 1, 2013',
-            '2013-Nov-01', 'Fri, 01 Nov 2013 10:00:00 +0000',
+            '2013-Nov-01', 'Fri, 01 Nov 2013 10:00:00 +0000', '2013-11-01T10:00:00Z', '2013-11-01T10:00:00.000+02:00',
+            '2013-11-1', '1/11/13', '01-NOV-13', 'Nov. 1, 2013', 'November 1st, 2013', '1-November-2013', '1.Nov.2013',
+            '01Nov2013', 'Nov-01-2013', 'november 1 2013',
+            // Bulgarian
+            '1. 11. 2013', '01.11.2013 г.', '01.11.2013г.', '1 ноември 2013', '1 ноември 2013 г.', '01-ное-2013',
+            // Other languages
+            '1 noviembre 2013', '1 de noviembre de 2013', '1. November 2013', '1 novembre 2013', '1 listopada 2013',
+            '1 ноября 2013', 'viernes, 1 de noviembre de 2013', 'петък, 1 ноември 2013',
+            // Space-separated numbers and other layouts
+            '01 11 2013', '2013 11 01', '01 Nov, 2013', '01/Nov/2013', '2013 Nov 1', '01/Nov/2013:10:00:00 +0000',
             // Unix timestamps (seconds and milliseconds, UTC)
             '1383264000', '1383264000000',
             // Surrounding whitespace
@@ -62,6 +72,20 @@ final class DateParserTest extends TestCase
     public function testItParsesSupportedFormats(string $value): void
     {
         $this->assertSame('2013-11-01', $this->parser->parse($value)->toDateString());
+    }
+
+    #[TestWith(['Sept 1, 2013', '2013-09-01'])]
+    #[TestWith(['1 Sept 2013', '2013-09-01'])]
+    #[TestWith(['11/01/2013 10:00 AM', '2013-01-11'])]
+    public function testOtherSupportedValues(string $value, string $expected): void
+    {
+        $this->assertSame($expected, $this->parser->parse($value)->toDateString());
+    }
+
+    public function testParseDayNumberMatchesParse(): void
+    {
+        $this->assertSame(16010, $this->parser->parseDayNumber('1 ноември 2013'));
+        $this->assertSame(16010, $this->parser->parseDayNumber('2013-11-01'));
     }
 
     public function testTheTimeOfDayIsDropped(): void
@@ -98,6 +122,14 @@ final class DateParserTest extends TestCase
     #[TestWith(['01/11/2013/5'])]
     #[TestWith(['01/11-2013'])]
     #[TestWith(['123'])]
+    #[TestWith(['abc 1 2013'])]
+    #[TestWith(['1 foo 2013'])]
+    #[TestWith(['1 Nov 2 Dec 2013'])]
+    #[TestWith(['1 2013'])]
+    #[TestWith(['1 11 2013 5'])]
+    #[TestWith(['2013-W44-5'])]
+    #[TestWith(['2013-305'])]
+    #[TestWith(['2013年11月1日'])]
     public function testInvalidValuesAreRejected(string $value): void
     {
         $this->expectException(InvalidDateException::class);
@@ -115,6 +147,10 @@ final class DateParserTest extends TestCase
     #[TestWith(['20130230'])]
     #[TestWith(['30 Feb 2013'])]
     #[TestWith(['Monday, November 1, 2013'])]
+    #[TestWith(['31/04/2013'])]
+    #[TestWith(['31 ноември 2013'])]
+    #[TestWith(['понеделник, 1 ноември 2013'])]
+    #[TestWith(['lunes, 1 de noviembre de 2013'])]
     public function testImpossibleDatesAreRejected(string $value): void
     {
         $this->expectException(InvalidDateException::class);
@@ -157,5 +193,36 @@ final class DateParserTest extends TestCase
     public function testTwoDigitYears(string $value, string $expected): void
     {
         $this->assertSame($expected, $this->parser->parse($value)->toDateString());
+    }
+
+    public function testWithAmbiguousOrderReturnsANewParser(): void
+    {
+        $monthFirst = $this->parser->withAmbiguousOrder(DateOrder::MonthFirst);
+
+        $this->assertNotSame($this->parser, $monthFirst);
+        $this->assertSame('2013-02-01', $this->parser->parse('01/02/2013')->toDateString());
+        $this->assertSame('2013-01-02', $monthFirst->parse('01/02/2013')->toDateString());
+    }
+
+    #[TestWith(['01/02/2013', DateOrderEvidence::Ambiguous])]
+    #[TestWith(['01.02.13', DateOrderEvidence::Ambiguous])]
+    #[TestWith(['01 02 2013', DateOrderEvidence::Ambiguous])]
+    #[TestWith(['01.02.2013 г.', DateOrderEvidence::Ambiguous])]
+    #[TestWith(['01/02/2013 10:00', DateOrderEvidence::Ambiguous])]
+    #[TestWith(['25/02/2013', DateOrderEvidence::DayFirst])]
+    #[TestWith(['25-02-2013', DateOrderEvidence::DayFirst])]
+    #[TestWith(['02/25/2013', DateOrderEvidence::MonthFirst])]
+    #[TestWith(['12/31/2014', DateOrderEvidence::MonthFirst])]
+    #[TestWith(['05/05/2013', DateOrderEvidence::None])]
+    #[TestWith(['2013/02/01', DateOrderEvidence::None])]
+    #[TestWith(['2013-02-01', DateOrderEvidence::None])]
+    #[TestWith(['1 Feb 2013', DateOrderEvidence::None])]
+    #[TestWith(['Feb 01 13', DateOrderEvidence::None])]
+    #[TestWith(['1383264000', DateOrderEvidence::None])]
+    #[TestWith(['NULL', DateOrderEvidence::None])]
+    #[TestWith(['abc', DateOrderEvidence::None])]
+    public function testDateOrderEvidence(string $value, DateOrderEvidence $expected): void
+    {
+        $this->assertSame($expected, $this->parser->dateOrderEvidence($value));
     }
 }

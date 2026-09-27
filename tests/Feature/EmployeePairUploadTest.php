@@ -101,6 +101,13 @@ final class EmployeePairUploadTest extends TestCase
             ->assertSeeInOrder(['1 other pair', 'also worked together for 10 days', 'lowest employee IDs']);
     }
 
+    public function testTheDefaultDateOrderIsMentionedWhenTheFileGivesNoEvidence(): void
+    {
+        $this->upload("1,10,01/02/2014,03/04/2014\n2,10,02/02/2014,03/04/2014\n")
+            ->assertOk()
+            ->assertSee('Ambiguous dates like 01/02/2014 were read as day-first (the default; the file gives no evidence).');
+    }
+
     public function testUploadingWithoutAFileFailsValidation(): void
     {
         $this->from('/')->post('/')
