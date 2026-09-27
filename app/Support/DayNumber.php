@@ -20,9 +20,12 @@ final class DayNumber
      */
     public static function fromDate(DateTimeInterface $date): int
     {
-        $midnightUtc = gmmktime(0, 0, 0, (int) $date->format('n'), (int) $date->format('j'), (int) $date->format('Y'));
+        return self::fromYearMonthDay((int) $date->format('Y'), (int) $date->format('n'), (int) $date->format('j'));
+    }
 
-        return intdiv($midnightUtc, self::SECONDS_PER_DAY);
+    public static function fromYearMonthDay(int $year, int $month, int $day): int
+    {
+        return intdiv(gmmktime(0, 0, 0, $month, $day, $year), self::SECONDS_PER_DAY);
     }
 
     public static function toDate(int $day): DateTimeImmutable

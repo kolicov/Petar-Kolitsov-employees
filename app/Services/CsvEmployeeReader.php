@@ -13,6 +13,7 @@ use App\Enums\DateOrderReason;
 use App\Exceptions\CsvImportException;
 use App\Exceptions\InvalidDateException;
 use App\Exceptions\InvalidRowException;
+use App\Support\DayNumber;
 
 final readonly class CsvEmployeeReader
 {
@@ -21,9 +22,6 @@ final readonly class CsvEmployeeReader
     private const int COLUMNS = 4;
 
     private const int MAX_WARNINGS = 500;
-
-    /** Distinct date values remembered while reading one file; dates repeat a lot. */
-    private const int MAX_CACHED_VALUES = 5000;
 
     private const string UTF8_BOM = "\xEF\xBB\xBF";
 
@@ -60,7 +58,7 @@ final readonly class CsvEmployeeReader
     {
         $delimiter = $this->detectDelimiter($handle);
         $dateOrder = $this->detectDateOrder($handle, $delimiter);
-        $dateParser = $this->dateParser->withAmbiguousOrder($dateOrder->order);
+        $dates = new DateCache($this->dateParser->withAmbiguousOrder($dateOrder->order));
 
         $records = [];
         $warnings = [];
@@ -72,7 +70,7 @@ final readonly class CsvEmployeeReader
             if ($isFirstRow) {
                 $isFirstRow = false;
 
-                if ($this->isHeader($row, $dateParser)) {
+                if ($this->isHeader($row, $dates)) {
                     continue;
                 }
             }
@@ -80,7 +78,7 @@ final readonly class CsvEmployeeReader
             $dataRows++;
 
             try {
-                $records[] = $this->toRecord($row, $dateParser);
+                $records[] = $this->toRecord($row, $dates);
             } catch (InvalidRowException $e) {
                 $skipped++;
 
@@ -149,7 +147,7 @@ final readonly class CsvEmployeeReader
             }
 
             foreach ([$row[2], $row[3]] as $value) {
-                if (count($evidenceCache) >= self::MAX_CACHED_VALUES) {
+                if (count($evidenceCache) >= DateCache::MAX_ENTRIES) {
                     $evidenceCache = [];
                 }
 
@@ -242,7 +240,7 @@ final readonly class CsvEmployeeReader
      *
      * @throws InvalidRowException
      */
-    private function toRecord(array $row, DateParser $dateParser): EmployeeRecord
+    private function toRecord(array $row, DateCache $dates): EmployeeRecord
     {
         if (count($row) !== self::COLUMNS) {
             throw new InvalidRowException(sprintf('expected %d columns, found %d', self::COLUMNS, count($row)));
@@ -258,13 +256,13 @@ final readonly class CsvEmployeeReader
             throw new InvalidRowException(sprintf("invalid ProjectID '%s'", $projectId));
         }
 
-        if ($dateParser->isNull($dateFrom)) {
+        if ($dates->isNull($dateFrom)) {
             throw new InvalidRowException('DateFrom is missing (only DateTo may be NULL)');
         }
 
         try {
-            $from = $dateParser->parse($dateFrom);
-            $to = $dateParser->parseOrToday($dateTo);
+            $from = $dates->dayNumber($dateFrom);
+            $to = $dates->dayNumberOrToday($dateTo);
         } catch (InvalidDateException $e) {
             throw new InvalidRowException($e->getMessage());
         }
@@ -272,28 +270,28 @@ final readonly class CsvEmployeeReader
         if ($from > $to) {
             throw new InvalidRowException(sprintf(
                 'DateFrom %s is after DateTo %s',
-                $from->toDateString(),
-                $to->toDateString(),
+                DayNumber::toDate($from)->format('Y-m-d'),
+                DayNumber::toDate($to)->format('Y-m-d'),
             ));
         }
 
-        return EmployeeRecord::fromDates((int) $empId, (int) $projectId, $from, $to);
+        return new EmployeeRecord((int) $empId, (int) $projectId, $from, $to);
     }
 
     /**
      * @param  list<string>  $row
      */
-    private function isHeader(array $row, DateParser $dateParser): bool
+    private function isHeader(array $row, DateCache $dates): bool
     {
         [$empId, $projectId, $dateFrom] = array_pad($row, 3, '');
 
-        return ! $this->isId($empId) && ! $this->isId($projectId) && ! $this->isDate($dateFrom, $dateParser);
+        return ! $this->isId($empId) && ! $this->isId($projectId) && ! $this->isDate($dateFrom, $dates);
     }
 
-    private function isDate(string $value, DateParser $dateParser): bool
+    private function isDate(string $value, DateCache $dates): bool
     {
         try {
-            $dateParser->parse($value);
+            $dates->dayNumber($value);
 
             return true;
         } catch (InvalidDateException) {

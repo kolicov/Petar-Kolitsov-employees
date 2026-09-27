@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Enums\DateOrder;
 use App\Enums\DateOrderEvidence;
 use App\Exceptions\InvalidDateException;
+use App\Support\DayNumber;
 use Carbon\CarbonImmutable;
 
 final readonly class DateParser
@@ -58,17 +59,17 @@ final readonly class DateParser
      */
     public function parse(string $value): CarbonImmutable
     {
-        $value = trim($value);
+        return CarbonImmutable::create(...$this->yearMonthDay($value));
+    }
 
-        if ($value === '') {
-            throw InvalidDateException::for($value);
-        }
-
-        return $this->fromTimestamp($value)
-            ?? $this->fromCompactIso($value)
-            ?? $this->fromNumeric($value)
-            ?? $this->fromTokens($value)
-            ?? throw InvalidDateException::for($value);
+    /**
+     * The same as parse(), as a day number (see DayNumber), without creating a date object.
+     *
+     * @throws InvalidDateException
+     */
+    public function parseDayNumber(string $value): int
+    {
+        return DayNumber::fromYearMonthDay(...$this->yearMonthDay($value));
     }
 
     /**
@@ -104,7 +105,30 @@ final readonly class DateParser
         };
     }
 
-    private function fromTimestamp(string $value): ?CarbonImmutable
+    /**
+     * @return array{int, int, int} A valid calendar date as [year, month, day].
+     *
+     * @throws InvalidDateException
+     */
+    private function yearMonthDay(string $value): array
+    {
+        $value = trim($value);
+
+        if ($value === '') {
+            throw InvalidDateException::for($value);
+        }
+
+        return $this->fromTimestamp($value)
+            ?? $this->fromCompactIso($value)
+            ?? $this->fromNumeric($value)
+            ?? $this->fromTokens($value)
+            ?? throw InvalidDateException::for($value);
+    }
+
+    /**
+     * @return array{int, int, int}|null
+     */
+    private function fromTimestamp(string $value): ?array
     {
         if (preg_match('/^\d{9,10}$/', $value)) {
             $seconds = (int) $value;
@@ -114,12 +138,13 @@ final readonly class DateParser
             return null;
         }
 
-        $date = CarbonImmutable::createFromTimestampUTC($seconds);
-
-        return $this->makeDate($date->year, $date->month, $date->day);
+        return $this->makeDate(...array_map(intval(...), explode('-', gmdate('Y-n-j', $seconds))));
     }
 
-    private function fromCompactIso(string $value): ?CarbonImmutable
+    /**
+     * @return array{int, int, int}|null
+     */
+    private function fromCompactIso(string $value): ?array
     {
         if (! preg_match('/^(\d{4})(\d{2})(\d{2})$/', $value, $m)) {
             return null;
@@ -130,8 +155,10 @@ final readonly class DateParser
 
     /**
      * Fast path for the most common numeric dates: 2013-11-01, 01/11/2013, 01.11.13 10:00, ...
+     *
+     * @return array{int, int, int}|null
      */
-    private function fromNumeric(string $value): ?CarbonImmutable
+    private function fromNumeric(string $value): ?array
     {
         if (! preg_match(self::NUMERIC_DATE, $value, $m)) {
             return null;
@@ -142,8 +169,10 @@ final readonly class DateParser
 
     /**
      * Any other date: numbers and words in any order, with any separators.
+     *
+     * @return array{int, int, int}|null
      */
-    private function fromTokens(string $value): ?CarbonImmutable
+    private function fromTokens(string $value): ?array
     {
         $tokens = $this->tokenize($value);
 
@@ -160,7 +189,7 @@ final readonly class DateParser
         };
 
         // A weekday that doesn't match the date rejects the value.
-        if ($date === null || ($weekday !== null && $date->dayOfWeek !== $weekday)) {
+        if ($date === null || ($weekday !== null && $this->weekday($date) !== $weekday)) {
             return null;
         }
 
@@ -234,8 +263,9 @@ final readonly class DateParser
      * month (in the configured order unless a number above 12 decides) and the year.
      *
      * @param  list<string>  $numbers
+     * @return array{int, int, int}|null
      */
-    private function fromNumbers(array $numbers): ?CarbonImmutable
+    private function fromNumbers(array $numbers): ?array
     {
         [$first, $second, $third] = $numbers;
 
@@ -263,8 +293,9 @@ final readonly class DateParser
      * With two short numbers the last one is the year ("Nov 01 13").
      *
      * @param  list<string>  $numbers
+     * @return array{int, int, int}|null
      */
-    private function withMonthName(array $numbers, int $month): ?CarbonImmutable
+    private function withMonthName(array $numbers, int $month): ?array
     {
         [$day, $year] = strlen($numbers[0]) === 4 ? [$numbers[1], $numbers[0]] : $numbers;
 
@@ -286,12 +317,24 @@ final readonly class DateParser
         return $year < 70 ? 2000 + $year : 1900 + $year;
     }
 
-    private function makeDate(int $year, int $month, int $day): ?CarbonImmutable
+    /**
+     * @return array{int, int, int}|null
+     */
+    private function makeDate(int $year, int $month, int $day): ?array
     {
         if ($year < 1000 || $year > 9999 || ! checkdate($month, $day, $year)) {
             return null;
         }
 
-        return CarbonImmutable::create($year, $month, $day);
+        return [$year, $month, $day];
+    }
+
+    /**
+     * @param  array{int, int, int}  $date
+     * @return int 0 (Sunday) to 6 (Saturday), as in Carbon.
+     */
+    private function weekday(array $date): int
+    {
+        return (int) gmdate('w', gmmktime(0, 0, 0, $date[1], $date[2], $date[0]));
     }
 }
