@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Enums\DateOrder;
+use App\Services\DateParser;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -11,7 +13,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->singleton(DateParser::class, fn (): DateParser => new DateParser(
+            DateOrder::from(config('employees.ambiguous_date_order')),
+        ));
     }
 
     /**

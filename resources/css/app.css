@@ -7,3 +7,19 @@
     --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
         'Segoe UI Symbol', 'Noto Color Emoji';
 }
+
+/* Sort indicators for the datagrid headers (see resources/js/app.js). */
+[data-sort-icon]::after {
+    content: '↕';
+    opacity: 0.35;
+}
+
+th[aria-sort='ascending'] [data-sort-icon]::after {
+    content: '▲';
+    opacity: 1;
+}
+
+th[aria-sort='descending'] [data-sort-icon]::after {
+    content: '▼';
+    opacity: 1;
+}

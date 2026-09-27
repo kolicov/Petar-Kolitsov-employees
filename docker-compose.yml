@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    image: employees-pair
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: "Employee Pairs"
+      APP_ENV: production
+      APP_DEBUG: "false"
+      APP_URL: http://localhost:8000
+      LOG_CHANNEL: stderr
+      SESSION_DRIVER: file
+      CACHE_STORE: file
+      QUEUE_CONNECTION: sync
