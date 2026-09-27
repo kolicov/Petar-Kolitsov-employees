@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\DTO\CsvReadResult;
+use App\DTO\DateOrderDetection;
 use App\DTO\EmployeeRecord;
+use App\Enums\DateOrder;
+use App\Enums\DateOrderEvidence;
+use App\Enums\DateOrderReason;
 use App\Exceptions\CsvImportException;
 use App\Exceptions\InvalidDateException;
 use App\Exceptions\InvalidRowException;
@@ -17,6 +21,9 @@ final readonly class CsvEmployeeReader
     private const int COLUMNS = 4;
 
     private const int MAX_WARNINGS = 500;
+
+    /** Distinct date values remembered while reading one file; dates repeat a lot. */
+    private const int MAX_CACHED_VALUES = 5000;
 
     private const string UTF8_BOM = "\xEF\xBB\xBF";
 
@@ -52,28 +59,20 @@ final readonly class CsvEmployeeReader
     private function readRows($handle): CsvReadResult
     {
         $delimiter = $this->detectDelimiter($handle);
+        $dateOrder = $this->detectDateOrder($handle, $delimiter);
+        $dateParser = $this->dateParser->withAmbiguousOrder($dateOrder->order);
 
         $records = [];
         $warnings = [];
         $skipped = 0;
-        $lineNumber = 0;
-        $nextLineNumber = 1;
         $dataRows = 0;
         $isFirstRow = true;
 
-        while (($row = fgetcsv($handle, null, $delimiter, '"', '')) !== false) {
-            $lineNumber = $nextLineNumber;
-            $nextLineNumber += 1 + substr_count(implode('', $row), "\n");
-            $row = $this->clean($row, $isFirstRow);
-
-            if ($row === []) {
-                continue;
-            }
-
+        foreach ($this->rows($handle, $delimiter) as $lineNumber => $row) {
             if ($isFirstRow) {
                 $isFirstRow = false;
 
-                if ($this->isHeader($row)) {
+                if ($this->isHeader($row, $dateParser)) {
                     continue;
                 }
             }
@@ -81,7 +80,7 @@ final readonly class CsvEmployeeReader
             $dataRows++;
 
             try {
-                $records[] = $this->toRecord($row);
+                $records[] = $this->toRecord($row, $dateParser);
             } catch (InvalidRowException $e) {
                 $skipped++;
 
@@ -103,7 +102,85 @@ final readonly class CsvEmployeeReader
             throw new CsvImportException('The file contains no valid rows.', $warnings, $skipped);
         }
 
-        return new CsvReadResult($records, $warnings, $skipped);
+        return new CsvReadResult($records, $warnings, $skipped, $dateOrder);
+    }
+
+    /**
+     * Non-blank rows, trimmed, keyed by their line number. A quoted value may
+     * span several lines, so physical lines are counted.
+     *
+     * @param  resource  $handle
+     * @return iterable<int, list<string>>
+     */
+    private function rows($handle, string $delimiter): iterable
+    {
+        rewind($handle);
+
+        $nextLineNumber = 1;
+
+        while (($row = fgetcsv($handle, null, $delimiter, '"', '')) !== false) {
+            $lineNumber = $nextLineNumber;
+            $nextLineNumber += 1 + substr_count(implode('', $row), "\n");
+            $row = $this->clean($row, $lineNumber === 1);
+
+            if ($row !== []) {
+                yield $lineNumber => $row;
+            }
+        }
+    }
+
+    /**
+     * A cheap first pass over the dates of all valid-looking rows: if the file
+     * only contains dates that prove one day/month order (25/02/2013 or
+     * 02/25/2013), its ambiguous dates are read that way; otherwise the
+     * configured default is used.
+     *
+     * @param  resource  $handle
+     */
+    private function detectDateOrder($handle, string $delimiter): DateOrderDetection
+    {
+        $proofs = [];
+        $ambiguousExample = null;
+        $evidenceCache = [];
+
+        foreach ($this->rows($handle, $delimiter) as $lineNumber => $row) {
+            if (count($row) !== self::COLUMNS || ! $this->isId($row[0]) || ! $this->isId($row[1])) {
+                continue;
+            }
+
+            foreach ([$row[2], $row[3]] as $value) {
+                if (count($evidenceCache) >= self::MAX_CACHED_VALUES) {
+                    $evidenceCache = [];
+                }
+
+                $evidence = $evidenceCache[$value] ??= $this->dateParser->dateOrderEvidence($value);
+
+                if ($evidence === DateOrderEvidence::Ambiguous) {
+                    $ambiguousExample ??= $value;
+                } elseif ($evidence !== DateOrderEvidence::None) {
+                    $proofs[$evidence->name] ??= [$lineNumber, $value];
+                }
+            }
+
+            if ($ambiguousExample !== null && count($proofs) === 2) {
+                break; // Conflicting evidence: reading further changes nothing.
+            }
+        }
+
+        rewind($handle);
+
+        $default = $this->dateParser->ambiguousOrder;
+
+        if (count($proofs) !== 1) {
+            $reason = $proofs === [] ? DateOrderReason::Default : DateOrderReason::Conflicting;
+
+            return new DateOrderDetection($default, $reason, $ambiguousExample);
+        }
+
+        $order = isset($proofs[DateOrderEvidence::DayFirst->name]) ? DateOrder::DayFirst : DateOrder::MonthFirst;
+        [$lineNumber, $value] = reset($proofs);
+
+        return new DateOrderDetection($order, DateOrderReason::Detected, $ambiguousExample, $lineNumber, $value);
     }
 
     /**
@@ -165,7 +242,7 @@ final readonly class CsvEmployeeReader
      *
      * @throws InvalidRowException
      */
-    private function toRecord(array $row): EmployeeRecord
+    private function toRecord(array $row, DateParser $dateParser): EmployeeRecord
     {
         if (count($row) !== self::COLUMNS) {
             throw new InvalidRowException(sprintf('expected %d columns, found %d', self::COLUMNS, count($row)));
@@ -181,13 +258,13 @@ final readonly class CsvEmployeeReader
             throw new InvalidRowException(sprintf("invalid ProjectID '%s'", $projectId));
         }
 
-        if ($this->dateParser->isNull($dateFrom)) {
+        if ($dateParser->isNull($dateFrom)) {
             throw new InvalidRowException('DateFrom is missing (only DateTo may be NULL)');
         }
 
         try {
-            $from = $this->dateParser->parse($dateFrom);
-            $to = $this->dateParser->parseOrToday($dateTo);
+            $from = $dateParser->parse($dateFrom);
+            $to = $dateParser->parseOrToday($dateTo);
         } catch (InvalidDateException $e) {
             throw new InvalidRowException($e->getMessage());
         }
@@ -206,17 +283,17 @@ final readonly class CsvEmployeeReader
     /**
      * @param  list<string>  $row
      */
-    private function isHeader(array $row): bool
+    private function isHeader(array $row, DateParser $dateParser): bool
     {
         [$empId, $projectId, $dateFrom] = array_pad($row, 3, '');
 
-        return ! $this->isId($empId) && ! $this->isId($projectId) && ! $this->isDate($dateFrom);
+        return ! $this->isId($empId) && ! $this->isId($projectId) && ! $this->isDate($dateFrom, $dateParser);
     }
 
-    private function isDate(string $value): bool
+    private function isDate(string $value, DateParser $dateParser): bool
     {
         try {
-            $this->dateParser->parse($value);
+            $dateParser->parse($value);
 
             return true;
         } catch (InvalidDateException) {

@@ -17,5 +17,6 @@ final readonly class CsvReadResult
         public array $records,
         public array $warnings,
         public int $skippedRows = 0,
+        public ?DateOrderDetection $dateOrder = null,
     ) {}
 }

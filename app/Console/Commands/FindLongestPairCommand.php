@@ -39,6 +39,10 @@ final class FindLongestPairCommand extends Command
 
         $this->printWarnings($csv->warnings, $csv->skippedRows);
 
+        if (($dateOrderNote = $csv->dateOrder?->summary()) !== null) {
+            $this->toStderr(sprintf('<comment>%s</comment>', $dateOrderNote));
+        }
+
         $pair = $finder->find($csv->records);
 
         if ($pair === null) {

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Enums\DateOrder;
+use App\Enums\DateOrderEvidence;
 use App\Exceptions\InvalidDateException;
 use Carbon\CarbonImmutable;
 
@@ -26,10 +27,18 @@ final readonly class DateParser
 
     private const string SEPARATOR = '/^[\s\/.,\-]*$/u';
 
+    /** Three numbers with the year last, the only shape where day and month can be swapped. */
+    private const string YEAR_LAST_SHAPE = '/^\D*\d{1,2}\D+\d{1,2}\D+\d{2}(?:\d{2})?\D*$/u';
+
     public function __construct(
         private DateNames $names,
-        private DateOrder $ambiguousOrder = DateOrder::DayFirst,
+        public DateOrder $ambiguousOrder = DateOrder::DayFirst,
     ) {}
+
+    public function withAmbiguousOrder(DateOrder $order): self
+    {
+        return new self($this->names, $order);
+    }
 
     public function isNull(string $value): bool
     {
@@ -60,6 +69,39 @@ final readonly class DateParser
             ?? $this->fromNumeric($value)
             ?? $this->fromTokens($value)
             ?? throw InvalidDateException::for($value);
+    }
+
+    /**
+     * What a value proves about the day/month order of numeric dates with the
+     * year last. Only looks at the numbers; the value is not fully parsed.
+     */
+    public function dateOrderEvidence(string $value): DateOrderEvidence
+    {
+        $value = trim($value);
+
+        if (preg_match(self::NUMERIC_DATE, $value, $m)) {
+            $numbers = [$m[1], $m[3], $m[4]];
+        } elseif (preg_match(self::YEAR_LAST_SHAPE, $value) && ($tokens = $this->tokenize($value)) !== null
+            && $tokens['month'] === null && $tokens['separatedAlike'] && count($tokens['numbers']) === 3) {
+            $numbers = $tokens['numbers'];
+        } else {
+            return DateOrderEvidence::None;
+        }
+
+        [$first, $second, $year] = $numbers;
+
+        if (strlen($first) > 2 || strlen($second) > 2 || ! in_array(strlen($year), [2, 4], true)) {
+            return DateOrderEvidence::None;
+        }
+
+        [$first, $second] = [(int) $first, (int) $second];
+
+        return match (true) {
+            $first < 1 || $second < 1 || ($first > 12 && $second > 12) || $first === $second => DateOrderEvidence::None,
+            $first > 12 => DateOrderEvidence::DayFirst,
+            $second > 12 => DateOrderEvidence::MonthFirst,
+            default => DateOrderEvidence::Ambiguous,
+        };
     }
 
     private function fromTimestamp(string $value): ?CarbonImmutable

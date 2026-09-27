@@ -52,6 +52,7 @@ final class EmployeePairController extends Controller
             'pair' => $this->finder->find($csv->records),
             'warnings' => $csv->warnings,
             'skippedRows' => $csv->skippedRows,
+            'dateOrderNote' => $csv->dateOrder?->summary(),
         ]);
     }
 }

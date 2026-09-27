@@ -11,4 +11,12 @@ enum DateOrder: string
 {
     case DayFirst = 'day_first';
     case MonthFirst = 'month_first';
+
+    public function label(): string
+    {
+        return match ($this) {
+            self::DayFirst => 'day-first',
+            self::MonthFirst => 'month-first',
+        };
+    }
 }

@@ -8,6 +8,7 @@
     $pair ??= null;
     $fileName ??= null;
     $error ??= null;
+    $dateOrderNote ??= null;
 @endphp
 
 @section('content')
@@ -88,6 +89,10 @@
                 <div class="mt-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                     No pair of employees worked together on a common project in this file.
                 </div>
+            @endif
+
+            @if ($dateOrderNote)
+                <p class="mt-3 text-sm text-slate-600" data-testid="date-order">{{ $dateOrderNote }}</p>
             @endif
         </section>
     @endif
