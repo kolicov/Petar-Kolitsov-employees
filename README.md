@@ -1,4 +1,4 @@
-# Employees who worked together the longest
+# Employees who worked together the longest — Petar Kolitsov
 
 A Laravel application that reads a CSV file of project assignments
 (`EmpID, ProjectID, DateFrom, DateTo`) and finds the **pair of employees who worked
@@ -10,12 +10,23 @@ sum of those overlapping days across all their common projects.
 143, 218, 372        <- EmpID1, EmpID2, TotalDaysTogether
 ```
 
+## Requirements checklist
+
+| Requirement | Status |
+|---|---|
+| Find the pair of employees who worked together on common projects the longest | ✅ |
+| `DateTo = NULL` means today | ✅ |
+| Input data loaded from a CSV file | ✅ |
+| Repository named `{FirstName}-{LastName}-employees` | ✅ |
+| Bonus 1: UI with a file picker and a datagrid (`Employee ID #1`, `Employee ID #2`, `Project ID`, `Days worked`) | ✅ |
+| Bonus 2: multiple date formats | ✅ ([full list](#supported-date-formats)) |
+
 ## Features
 
 - **Core:** CSV input, `DateTo = NULL` means today, result in the `EmpID1, EmpID2, TotalDaysTogether` format.
 - **Bonus 1: web UI.** Pick a file (it's analysed as soon as you choose it) to see the winning pair and a
-  sortable datagrid of **all their common projects** (`Employee ID #1`, `Employee ID #2`, `Project ID`,
-  `Days worked`) with a total row.
+  datagrid of **all their common projects** (`Employee ID #1`, `Employee ID #2`, `Project ID`,
+  `Days worked`) with a total row. Click any column header to sort by it.
 - **Bonus 2: date formats.** ISO 8601, numeric dates with `/`, `.` or `-`, two-digit years, month
   names, weekdays, RFC 2822 and Unix timestamps. See the [full list](#supported-date-formats).
 - **Console command:** `php artisan employees:longest-pair file.csv [--details]`.
@@ -23,13 +34,23 @@ sum of those overlapping days across all their common projects.
   UTF-16 (Excel "Unicode text"), CRLF, blank lines, quoted values, streaming. Invalid rows are skipped
   with line-numbered warnings.
 
+![Web UI showing the winning pair and the datagrid of their common projects](docs/screenshot.png)
+
 ## Run with Docker
 
 ```bash
 docker compose up --build
 ```
 
-Open <http://localhost:8000>. An app key is generated on first start. No database is used.
+Open <http://localhost:8000>. An app key is generated automatically. No database is used.
+
+Run the console command inside the container (the sample files are included in the image):
+
+```bash
+docker compose exec app php artisan employees:longest-pair samples/sample.csv
+```
+
+Stop the app with `docker compose down`.
 
 ## Run locally
 
@@ -72,6 +93,8 @@ $ php artisan employees:longest-pair samples/sample.csv --details
   empty or has no valid rows.
 
 ## Tests
+
+Run the tests locally (the Docker image is built without development dependencies):
 
 ```bash
 php artisan test
@@ -119,7 +142,8 @@ ones (`Nov 2013`) are not accepted.
 
 - **Inclusive day counting:** both the first and the last day count, so two employees on the same
   project on the same single day worked together for **1 day**. Switch with
-  `EmployeePairFinder::COUNT_DAYS_INCLUSIVE`.
+  `EmployeePairFinder::COUNT_DAYS_INCLUSIVE`. With exclusive counting the sample result would be
+  `143, 218, 369` (one day less per common project).
 - **NULL = today:** `NULL` (any case) or an empty DateTo means today (from Carbon's clock, frozen in
   tests). DateFrom is required.
 - **Ambiguous dates are day-first** (European): `01/02/2013` is 1 February. If the first number is > 12

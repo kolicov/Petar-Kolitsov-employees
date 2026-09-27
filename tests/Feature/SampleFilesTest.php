@@ -33,7 +33,7 @@ final class SampleFilesTest extends TestCase
 
     #[TestWith(['sample.csv'])]
     #[TestWith(['mixed-date-formats.csv'])]
-    public function testTheWinningPairIs143And218(string $file): void
+    public function testSampleFilesFindTheSameWinningPair(string $file): void
     {
         $this->artisan('employees:longest-pair', ['file' => base_path(sprintf('samples/%s', $file))])
             ->expectsOutput('143, 218, 372')
