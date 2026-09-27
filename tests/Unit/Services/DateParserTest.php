@@ -11,16 +11,19 @@ use Carbon\CarbonImmutable;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\TestWith;
 use PHPUnit\Framework\TestCase;
+use Tests\Support\CreatesDateParser;
 
 final class DateParserTest extends TestCase
 {
+    use CreatesDateParser;
+
     private DateParser $parser;
 
     protected function setUp(): void
     {
         parent::setUp();
         CarbonImmutable::setTestNow('2024-06-15 13:45:00');
-        $this->parser = new DateParser;
+        $this->parser = self::dateParser();
     }
 
     protected function tearDown(): void
@@ -131,7 +134,7 @@ final class DateParserTest extends TestCase
 
     public function testAmbiguousDatesCanBeMonthFirst(): void
     {
-        $parser = new DateParser(DateOrder::MonthFirst);
+        $parser = self::dateParser(DateOrder::MonthFirst);
 
         $this->assertSame('2013-01-02', $parser->parse('01/02/2013')->toDateString());
     }
@@ -140,7 +143,7 @@ final class DateParserTest extends TestCase
     #[TestWith([DateOrder::MonthFirst])]
     public function testUnambiguousNumericDatesIgnoreThePreference(DateOrder $order): void
     {
-        $parser = new DateParser($order);
+        $parser = self::dateParser($order);
 
         $this->assertSame('2013-11-13', $parser->parse('13/11/2013')->toDateString(), 'first number > 12 is the day');
         $this->assertSame('2013-11-13', $parser->parse('11/13/2013')->toDateString(), 'second number > 12 is the day');

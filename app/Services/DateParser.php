@@ -7,25 +7,27 @@ namespace App\Services;
 use App\Enums\DateOrder;
 use App\Exceptions\InvalidDateException;
 use Carbon\CarbonImmutable;
-use DateTimeImmutable;
 
 final readonly class DateParser
 {
     private const array NULL_VALUES = ['', 'null'];
 
-    private const array TEXT_FORMATS = [
-        'j M Y',
-        'j-M-Y',
-        'j M y',
-        'j-M-y',
-        'M j, Y',
-        'M j Y',
-        'Y-M-d',
-    ];
+    /** Words that can appear in a date without meaning anything: the Bulgarian year marker, Spanish "de", ... */
+    private const array FILLER_WORDS = ['г', 'год', 'година', 'de', 'del', 'of', 'the'];
 
-    private const string TIME_SUFFIX = '(?:[T\s]+(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?\s*(?:[AaPp][Mm])?\s*(?:Z|UTC|[+-]\d{2}:?\d{2})?)?';
+    private const string NUMERIC_DATE = '/^(\d{1,4})([\/.\-])(\d{1,2})\2(\d{1,4})(?:[T\s]+(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?\s*(?:[AaPp][Mm])?\s*(?:Z|UTC|[+-]\d{2}:?\d{2})?)?$/';
+
+    /** A time and time zone at the end ("T10:00:00+02:00", " 10:00 AM", log style ":10:00:00 +0000"). */
+    private const string TIME_AT_END = '/(?:t|\s+|:)(?:(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:[.,]\d+)?)?\s*(?:[ap]\.?m\.?)?|(?:1[0-2]|0?[1-9])\s*[ap]\.?m\.?)\s*(?:z|utc|gmt|[+-]\d{2}(?::?\d{2})?)?\s*$/u';
+
+    private const string ORDINAL_SUFFIX = '/(\d)(?:st|nd|rd|th)(?!\p{L})/u';
+
+    private const string TOKEN = '/(\d+|\p{L}+(?:-\p{L}+)*)/u';
+
+    private const string SEPARATOR = '/^[\s\/.,\-]*$/u';
 
     public function __construct(
+        private DateNames $names,
         private DateOrder $ambiguousOrder = DateOrder::DayFirst,
     ) {}
 
@@ -56,7 +58,7 @@ final readonly class DateParser
         return $this->fromTimestamp($value)
             ?? $this->fromCompactIso($value)
             ?? $this->fromNumeric($value)
-            ?? $this->fromText($value)
+            ?? $this->fromTokens($value)
             ?? throw InvalidDateException::for($value);
     }
 
@@ -84,26 +86,126 @@ final readonly class DateParser
         return $this->makeDate((int) $m[1], (int) $m[2], (int) $m[3]);
     }
 
+    /**
+     * Fast path for the most common numeric dates: 2013-11-01, 01/11/2013, 01.11.13 10:00, ...
+     */
     private function fromNumeric(string $value): ?CarbonImmutable
     {
-        $pattern = '/^(\d{1,4})([\/.\-])(\d{1,2})\2(\d{1,4})'.self::TIME_SUFFIX.'$/';
-
-        if (! preg_match($pattern, $value, $m)) {
+        if (! preg_match(self::NUMERIC_DATE, $value, $m)) {
             return null;
         }
 
-        [$first, $second, $third] = [$m[1], (int) $m[3], $m[4]];
+        return $this->fromNumbers([$m[1], $m[3], $m[4]]);
+    }
+
+    /**
+     * Any other date: numbers and words in any order, with any separators.
+     */
+    private function fromTokens(string $value): ?CarbonImmutable
+    {
+        $tokens = $this->tokenize($value);
+
+        if ($tokens === null) {
+            return null;
+        }
+
+        ['numbers' => $numbers, 'month' => $month, 'weekday' => $weekday] = $tokens;
+
+        $date = match (true) {
+            $month !== null && count($numbers) === 2 => $this->withMonthName($numbers, $month),
+            $month === null && count($numbers) === 3 && $tokens['separatedAlike'] => $this->fromNumbers($numbers),
+            default => null,
+        };
+
+        // A weekday that doesn't match the date rejects the value.
+        if ($date === null || ($weekday !== null && $date->dayOfWeek !== $weekday)) {
+            return null;
+        }
+
+        return $date;
+    }
+
+    /**
+     * Splits a date into numbers and words after removing the time, the time zone
+     * and ordinal suffixes. Returns null for anything that is not a number, a
+     * known word or a separator, so unknown words are never ignored.
+     *
+     * @return array{numbers: list<string>, month: ?int, weekday: ?int, separatedAlike: bool}|null
+     */
+    private function tokenize(string $value): ?array
+    {
+        $value = preg_replace([self::TIME_AT_END, self::ORDINAL_SUFFIX], ['', '$1'], mb_strtolower(trim($value)));
+        $parts = preg_split(self::TOKEN, $value, -1, PREG_SPLIT_DELIM_CAPTURE);
+
+        $numbers = [];
+        $separators = [];
+        $months = [];
+        $weekdays = [];
+        $separator = '';
+        $afterNumber = false;
+
+        foreach ($parts as $index => $part) {
+            if ($index % 2 === 0) {
+                if (! preg_match(self::SEPARATOR, $part)) {
+                    return null;
+                }
+                $separator = preg_replace('/\s+/', ' ', $part);
+
+                continue;
+            }
+
+            if (ctype_digit($part)) {
+                if ($afterNumber) {
+                    $separators[] = $separator;
+                }
+                $numbers[] = $part;
+                $afterNumber = true;
+
+                continue;
+            }
+
+            $afterNumber = false;
+
+            if (($month = $this->names->month($part)) !== null) {
+                $months[] = $month;
+            } elseif (($weekday = $this->names->weekday($part)) !== null) {
+                $weekdays[] = $weekday;
+            } elseif (! in_array($part, self::FILLER_WORDS, true)) {
+                return null;
+            }
+        }
+
+        if (count($months) > 1 || count($weekdays) > 1) {
+            return null;
+        }
+
+        return [
+            'numbers' => $numbers,
+            'month' => $months[0] ?? null,
+            'weekday' => $weekdays[0] ?? null,
+            'separatedAlike' => count($separators) === count($numbers) - 1 && count(array_unique($separators)) <= 1,
+        ];
+    }
+
+    /**
+     * Year-month-day when the first number has 4 digits, otherwise day and
+     * month (in the configured order unless a number above 12 decides) and the year.
+     *
+     * @param  list<string>  $numbers
+     */
+    private function fromNumbers(array $numbers): ?CarbonImmutable
+    {
+        [$first, $second, $third] = $numbers;
 
         if (strlen($first) === 4) {
-            return strlen($third) <= 2 ? $this->makeDate((int) $first, $second, (int) $third) : null;
+            return strlen($second) <= 2 && strlen($third) <= 2 ? $this->makeDate((int) $first, (int) $second, (int) $third) : null;
         }
 
-        if (strlen($first) > 2 || ! in_array(strlen($third), [2, 4], true)) {
+        if (strlen($first) > 2 || strlen($second) > 2 || ! in_array(strlen($third), [2, 4], true)) {
             return null;
         }
 
-        $year = $this->expandYear($third);
-        $first = (int) $first;
+        [$first, $second, $year] = [(int) $first, (int) $second, $this->expandYear($third)];
 
         $dayFirst = match (true) {
             $first > 12 => true,
@@ -111,57 +213,24 @@ final readonly class DateParser
             default => $this->ambiguousOrder === DateOrder::DayFirst,
         };
 
-        return $dayFirst
-            ? $this->makeDate($year, $second, $first)
-            : $this->makeDate($year, $first, $second);
+        return $dayFirst ? $this->makeDate($year, $second, $first) : $this->makeDate($year, $first, $second);
     }
 
-    private function fromText(string $value): ?CarbonImmutable
+    /**
+     * With a month name, a 4-digit number is the year and the other one the day.
+     * With two short numbers the last one is the year ("Nov 01 13").
+     *
+     * @param  list<string>  $numbers
+     */
+    private function withMonthName(array $numbers, int $month): ?CarbonImmutable
     {
-        $value = preg_replace(['/\s+/', '/(\d)(st|nd|rd|th)\b/i'], [' ', '$1'], $value);
+        [$day, $year] = strlen($numbers[0]) === 4 ? [$numbers[1], $numbers[0]] : $numbers;
 
-        $weekday = null;
-        if (preg_match('/^(mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+(.+)$/i', $value, $m)) {
-            [$weekday, $value] = [strtolower($m[1]), $m[2]];
-        }
-
-        if (! preg_match('/[a-z]/i', $value) || preg_match_all('/\d+/', $value) < 2) {
+        if (strlen($day) > 2 || ! in_array(strlen($year), [2, 4], true)) {
             return null;
         }
 
-        $date = $this->fromTextFormats($value) ?? $this->fromFreeText($value);
-
-        if ($date === null || ($weekday !== null && strtolower($date->format('D')) !== $weekday)) {
-            return null;
-        }
-
-        return $date;
-    }
-
-    private function fromTextFormats(string $value): ?CarbonImmutable
-    {
-        foreach (self::TEXT_FORMATS as $format) {
-            $date = DateTimeImmutable::createFromFormat('!'.$format, $value);
-
-            if ($date !== false && DateTimeImmutable::getLastErrors() === false) {
-                return $this->makeDate((int) $date->format('Y'), (int) $date->format('n'), (int) $date->format('j'));
-            }
-        }
-
-        return null;
-    }
-
-    private function fromFreeText(string $value): ?CarbonImmutable
-    {
-        $parsed = date_parse($value);
-
-        $isComplete = $parsed['year'] !== false && $parsed['month'] !== false && $parsed['day'] !== false;
-
-        if (! $isComplete || $parsed['error_count'] > 0 || $parsed['warning_count'] > 0 || isset($parsed['relative'])) {
-            return null;
-        }
-
-        return $this->makeDate($parsed['year'], $parsed['month'], $parsed['day']);
+        return $this->makeDate($this->expandYear($year), $month, (int) $day);
     }
 
     private function expandYear(string $year): int

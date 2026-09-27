@@ -8,13 +8,15 @@ use App\DTO\CsvReadResult;
 use App\DTO\EmployeeRecord;
 use App\Exceptions\CsvImportException;
 use App\Services\CsvEmployeeReader;
-use App\Services\DateParser;
 use Carbon\CarbonImmutable;
 use PHPUnit\Framework\Attributes\TestWith;
 use PHPUnit\Framework\TestCase;
+use Tests\Support\CreatesDateParser;
 
 final class CsvEmployeeReaderTest extends TestCase
 {
+    use CreatesDateParser;
+
     /** @var list<string> */
     private array $files = [];
 
@@ -234,7 +236,7 @@ final class CsvEmployeeReaderTest extends TestCase
         $this->expectException(CsvImportException::class);
         $this->expectExceptionMessage('does not exist or cannot be read');
 
-        (new CsvEmployeeReader(new DateParser))->read('/nonexistent/file.csv');
+        (new CsvEmployeeReader(self::dateParser()))->read('/nonexistent/file.csv');
     }
 
     private function read(string $contents): CsvReadResult
@@ -243,7 +245,7 @@ final class CsvEmployeeReaderTest extends TestCase
         file_put_contents($path, $contents);
         $this->files[] = $path;
 
-        return (new CsvEmployeeReader(new DateParser))->read($path);
+        return (new CsvEmployeeReader(self::dateParser()))->read($path);
     }
 
     /**
